@@ -255,7 +255,6 @@
     font-size: 0.9rem;
     line-height: 1.7;
     color: var(--text);
-    white-space: pre-wrap;
     word-break: break-word;
     max-height: 500px;
     overflow-y: auto;
@@ -276,6 +275,31 @@
   .result-content strong { color: white; font-weight: 500; }
   .result-content ul { padding-left: 1.2rem; margin: 0.4rem 0; }
   .result-content li { margin: 0.2rem 0; color: #ccc; }
+  .result-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.85rem;
+  }
+  .result-content th {
+    background: rgba(255,0,0,0.1);
+    color: var(--red);
+    font-weight: 500;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    text-align: left;
+    font-family: 'Bebas Neue', sans-serif;
+    letter-spacing: 0.05em;
+  }
+  .result-content td {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--border);
+    color: #ccc;
+    vertical-align: top;
+  }
+  .result-content tr:nth-child(even) td {
+    background: rgba(255,255,255,0.02);
+  }
   .error-box {
     display: none;
     margin-top: 1rem;
@@ -404,6 +428,7 @@
         <div class="result-title">ÖZET</div>
         <div class="result-actions">
           <button class="btn-small" onclick="copyResult()">Kopyala</button>
+          <button class="btn-small" onclick="downloadResult()">İndir</button>
           <button class="btn-small" onclick="clearResult()">Temizle</button>
         </div>
       </div>
@@ -420,7 +445,7 @@
 
 <script>
   // =============================================
-  // N8N WEBHOOK URL — kendi adresinle değiştir
+  // N8N WEBHOOK URL
   const WEBHOOK_URL = 'https://primary-production-d045f.up.railway.app/webhook/ytube';
   // =============================================
 
@@ -543,6 +568,7 @@
   }
 
   function showResult(summary, url) {
+    currentSummaryText = summary;
     document.getElementById('resultContent').innerHTML = formatMarkdown(summary);
     document.getElementById('videoUrlText').textContent = url;
     document.getElementById('videoInfo').classList.add('active');
@@ -550,16 +576,82 @@
   }
 
   function formatMarkdown(text) {
+    const lines = text.split('\n');
+    let html = '';
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      // Tablo satırı mı?
+      if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+        const tableLines = [];
+        while (i < lines.length && lines[i].trim().startsWith('|')) {
+          tableLines.push(lines[i]);
+          i++;
+        }
+        html += parseTable(tableLines);
+        continue;
+      }
+      // H2 başlık
+      if (line.startsWith('## ')) {
+        html += `<h2>${applyInline(line.slice(3))}</h2>`;
+      }
+      // Madde işareti
+      else if (line.match(/^[\*\-] /)) {
+        html += `<ul><li>${applyInline(line.slice(2))}</li></ul>`;
+      }
+      // Boş satır
+      else if (line.trim() === '') {
+        html += '<br>';
+      }
+      // Normal metin
+      else {
+        html += `<p style="margin:0.2rem 0">${applyInline(line)}</p>`;
+      }
+      i++;
+    }
+    // Yan yana ul'leri birleştir
+    html = html.replace(/<\/ul><ul>/g, '');
+    return html;
+  }
+
+  function applyInline(text) {
     return text
-      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/^- (.+)$/gm, '<li>$1</li>')
-      .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
-      .replace(/\n\n/g, '<br><br>')
-      .replace(/\n/g, '<br>');
+      .replace(/\*(.+?)\*/g, '<em>$1</em>');
+  }
+
+  function parseTable(lines) {
+    if (lines.length < 2) return lines.join('<br>');
+    let html = '<table>';
+    lines.forEach((line, idx) => {
+      // Ayırıcı satır (|---|---|) ise atla
+      if (line.replace(/[\|\-\:\s]/g, '') === '') return;
+      const cells = line.split('|').filter((_, ci) => ci > 0 && ci < line.split('|').length - 1);
+      if (idx === 0) {
+        html += '<thead><tr>' + cells.map(c => `<th>${applyInline(c.trim())}</th>`).join('') + '</tr></thead><tbody>';
+      } else {
+        html += '<tr>' + cells.map(c => `<td>${applyInline(c.trim())}</td>`).join('') + '</tr>';
+      }
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  let currentSummaryText = '';
+
+  function downloadResult() {
+    if (!currentSummaryText) return;
+    const blob = new Blob([currentSummaryText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'youtube-ozet.txt';
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function clearResult() {
+    currentSummaryText = '';
     document.getElementById('result').classList.remove('active');
     document.getElementById('videoInfo').classList.remove('active');
     document.getElementById('resultContent').innerHTML = '';
