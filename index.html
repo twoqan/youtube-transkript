@@ -403,6 +403,7 @@
       <div class="input-row">
         <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." />
         <button id="submitBtn" onclick="summarize()">ÖZETLE</button>
+        <button id="transcriptBtn" onclick="getTranscript()" style="background: #222; border: 1px solid #333;">TRANSKRİPT</button>
       </div>
     </div>
 
@@ -425,7 +426,7 @@
         <div class="video-url-text" id="videoUrlText"></div>
       </div>
       <div class="result-header">
-        <div class="result-title">ÖZET</div>
+        <div class="result-title" id="resultTitle">ÖZET</div>
         <div class="result-actions">
           <button class="btn-small" onclick="copyResult()">Kopyala</button>
           <button class="btn-small" onclick="downloadResult()">İndir</button>
@@ -445,9 +446,73 @@
 
 <script>
   // =============================================
-  // N8N WEBHOOK URL
+  // N8N WEBHOOK URL'LERİ
   const WEBHOOK_URL = 'https://primary-production-d045f.up.railway.app/webhook/ytube';
+  const TRANSCRIPT_URL = 'https://primary-production-d045f.up.railway.app/webhook/ytube-transcript';
   // =============================================
+
+  async function getTranscript() {
+    const input = document.getElementById('urlInput');
+    const url = input.value.trim();
+
+    if (!url) { showError('Lütfen bir YouTube linki girin.'); return; }
+    if (!url.includes('youtube.com') && !url.includes('youtu.be')) {
+      showError('Geçerli bir YouTube linki girin.');
+      return;
+    }
+
+    clearResult();
+    hideError();
+    startLoading(true);
+
+    let rawText = '';
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 180000);
+
+      const response = await fetch(TRANSCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ youtubeUrl: url }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+      rawText = await response.text();
+
+      if (!response.ok) {
+        let errMsg = `Sunucu hatası: ${response.status} ${response.statusText}`;
+        try { const e = JSON.parse(rawText); if (e.message) errMsg += ' — ' + e.message; } catch (_) {}
+        showError(errMsg, rawText);
+        return;
+      }
+
+      if (!rawText || rawText.trim() === '') {
+        showError('n8n boş yanıt döndürdü.', 'Yanıt gövdesi boş geldi.');
+        return;
+      }
+
+      let data;
+      try { data = JSON.parse(rawText); } catch (_) {
+        showError('Geçersiz yanıt geldi.', 'Ham yanıt: ' + rawText.substring(0, 300));
+        return;
+      }
+
+      stopLoading();
+      const item = Array.isArray(data) ? data[0] : data;
+      const transcript = item.transcript || item.text || item.output || JSON.stringify(item, null, 2);
+      showResult(transcript, url, 'TRANSKRİPT', false);
+
+    } catch (err) {
+      stopLoading();
+      if (err.name === 'AbortError') {
+        showError('İstek zaman aşımına uğradı (3 dakika).');
+      } else {
+        showError('Bağlantı hatası: ' + err.message, rawText ? 'Ham yanıt: ' + rawText.substring(0, 300) : '');
+      }
+    }
+  }
 
   async function summarize() {
     const input = document.getElementById('urlInput');
@@ -461,7 +526,7 @@
 
     clearResult();
     hideError();
-    startLoading();
+    startLoading(false);
 
     let rawText = '';
 
@@ -522,7 +587,7 @@
       const item = Array.isArray(data) ? data[0] : data;
       const summary = item.summary || item.text || item.output || JSON.stringify(item, null, 2);
 
-      showResult(summary, url);
+      showResult(summary, url, 'ÖZET', true);
 
     } catch (err) {
       stopLoading();
@@ -542,8 +607,9 @@
     }
   }
 
-  function startLoading() {
+  function startLoading(isSummary) {
     document.getElementById('submitBtn').disabled = true;
+    document.getElementById('transcriptBtn').disabled = true;
     document.getElementById('loader').classList.add('active');
     const steps = ['step1', 'step2', 'step3', 'step4'];
     const delays = [0, 2000, 5000, 12000];
@@ -560,6 +626,7 @@
 
   function stopLoading() {
     document.getElementById('submitBtn').disabled = false;
+    document.getElementById('transcriptBtn').disabled = false;
     document.getElementById('loader').classList.remove('active');
     ['step1','step2','step3','step4'].forEach(id => {
       const el = document.getElementById(id);
@@ -567,9 +634,12 @@
     });
   }
 
-  function showResult(summary, url) {
-    currentSummaryText = summary;
-    document.getElementById('resultContent').innerHTML = formatMarkdown(summary);
+  function showResult(text, url, title, useMarkdown) {
+    currentSummaryText = text;
+    document.getElementById('resultTitle').textContent = title;
+    document.getElementById('resultContent').innerHTML = useMarkdown
+      ? formatMarkdown(text)
+      : `<p style="white-space: pre-wrap; font-family: monospace; font-size: 0.82rem; line-height: 1.6; color: #ccc;">${text}</p>`;
     document.getElementById('videoUrlText').textContent = url;
     document.getElementById('videoInfo').classList.add('active');
     document.getElementById('result').classList.add('active');
@@ -645,7 +715,8 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'youtube-ozet.txt';
+    const title = document.getElementById('resultTitle').textContent;
+    a.download = title === 'TRANSKRİPT' ? 'youtube-transkript.txt' : 'youtube-ozet.txt';
     a.click();
     URL.revokeObjectURL(url);
   }
